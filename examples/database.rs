@@ -1,6 +1,6 @@
 use std::thread;
 use std::collections::HashMap;
-use mpsc_requests::channel;
+use crossbeam_requests::channel;
 #[derive(Debug)]
 enum Errors {
     NoSuchPerson,

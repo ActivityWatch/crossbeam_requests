@@ -1,5 +1,5 @@
 use std::thread;
-use mpsc_requests::channel;
+use crossbeam_requests::channel;
 
 fn main() {
     type RequestType = String;
