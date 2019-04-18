@@ -1,4 +1,6 @@
-//! mpsc_requests is a small library built on top of std::sync::mpsc but with
+//! mpsc_requests rewritted for crossbeam, written by @stjepang (https://github.com/crossbeam-rs/crossbeam/issues/353#issuecomment-484013974)
+//!
+//! mpsc_requests is a small library built on top of crossbeam-channel but with
 //! the addition of the consumer responding with a message to the producer.
 //! Since the producer no longer only produces and the consumer no longer only consumes, the
 //! Producer is renamed to [Requester] and the Consumer is renamed to [Responder].
@@ -16,7 +18,7 @@
 //! ## Simple echo example
 //! ```rust,run
 //! use std::thread;
-//! use mpsc_requests::channel;
+//! use crossbeam_requests::channel;
 //!
 //! type RequestType = String;
 //! type ResponseType = String;
@@ -33,14 +35,14 @@
 
 #![deny(missing_docs)]
 
-use std::sync::mpsc;
+use crossbeam_channel as cc;
 
 /// Create a [Requester] and a [Responder] with a channel between them
 ///
 /// The [Requester] can be cloned to be able to do requests to the same [Responder] from multiple
 /// threads.
 pub fn channel<Req, Res>() -> (Responder<Req, Res>, Requester<Req, Res>) {
-    let (request_sender, request_receiver) = mpsc::channel::<Request<Req, Res>>();
+    let (request_sender, request_receiver) = cc::unbounded::<Request<Req, Res>>();
     let c = Responder::new(request_receiver);
     let p = Requester::new(request_sender);
     return (c, p)
@@ -55,13 +57,13 @@ pub enum RequestError {
     /// Error occuring when channel from [Responder] to [Requester] is broken
     SendError
 }
-impl From<mpsc::RecvError> for RequestError {
-    fn from(_err: mpsc::RecvError) -> RequestError {
+impl From<cc::RecvError> for RequestError {
+    fn from(_err: cc::RecvError) -> RequestError {
         RequestError::RecvError
     }
 }
-impl<T> From<mpsc::SendError<T>> for RequestError {
-    fn from(_err: mpsc::SendError<T>) -> RequestError {
+impl<T> From<cc::SendError<T>> for RequestError {
+    fn from(_err: cc::SendError<T>) -> RequestError {
         RequestError::SendError
     }
 }
@@ -74,12 +76,12 @@ impl<T> From<mpsc::SendError<T>> for RequestError {
 /// when the object gets dropped
 pub struct Request<Req, Res> {
     request: Req,
-    response_sender: mpsc::Sender<Res>,
+    response_sender: cc::Sender<Res>,
     _responded: bool
 }
 
 impl<Req, Res> Request<Req, Res> {
-    fn new(request: Req, response_sender: mpsc::Sender<Res>) -> Request<Req, Res> {
+    fn new(request: Req, response_sender: cc::Sender<Res>) -> Request<Req, Res> {
         Request {
             request: request,
             response_sender: response_sender,
@@ -115,11 +117,11 @@ impl<Req, Res> Drop for Request<Req, Res> {
 
 /// A [Responder] listens to requests of a specific type and responds back to the [Requester]
 pub struct Responder<Req, Res> {
-    request_receiver: mpsc::Receiver<Request<Req, Res>>,
+    request_receiver: cc::Receiver<Request<Req, Res>>,
 }
 
 impl<Req, Res> Responder<Req, Res> {
-    fn new(request_receiver: mpsc::Receiver<Request<Req, Res>>) -> Responder<Req, Res> {
+    fn new(request_receiver: cc::Receiver<Request<Req, Res>>) -> Responder<Req, Res> {
         Responder {
             request_receiver: request_receiver,
         }
@@ -157,11 +159,11 @@ impl<Req, Res> Responder<Req, Res> {
 /// [Requester] has a connection to a [Responder] which it can send requests to
 #[derive(Clone)]
 pub struct Requester<Req, Res> {
-    request_sender: mpsc::Sender<Request<Req, Res>>,
+    request_sender: cc::Sender<Request<Req, Res>>,
 }
 
 impl<Req, Res> Requester<Req, Res> {
-    fn new(request_sender: mpsc::Sender<Request<Req, Res>>) -> Requester<Req, Res> {
+    fn new(request_sender: cc::Sender<Request<Req, Res>>) -> Requester<Req, Res> {
         Requester {
             request_sender: request_sender,
         }
@@ -169,7 +171,7 @@ impl<Req, Res> Requester<Req, Res> {
 
     /// Send request to the connected [Responder]
     pub fn request(&self, request: Req) -> Res {
-        let (response_sender, response_receiver) = mpsc::channel::<Res>();
+        let (response_sender, response_receiver) = cc::unbounded::<Res>();
         let full_request = Request::new(request, response_sender);
         self.request_sender.send(full_request).unwrap();
         response_receiver.recv().unwrap()
