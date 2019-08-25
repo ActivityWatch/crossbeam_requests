@@ -16,17 +16,17 @@ enum Responses {
 }
 
 fn main() {
-    let (responder, requester) = channel::<Commands, Result<Responses, Errors>>();
+    let (requester, responder) = channel::<Commands, Result<Responses, Errors>>();
     thread::spawn(move || {
         let mut age_table : HashMap<String, u64> = HashMap::new();
-        responder.poll_loop(|mut request| {
-            request.respond(match request.body() {
+        responder.poll_loop(|request, res_sender| {
+            res_sender.respond(match request {
                 Commands::CreateUser(user, age) => {
-                    age_table.insert(user.to_string(), *age);
+                    age_table.insert(user, age);
                     Ok(Responses::Success())
                 },
                 Commands::GetUser(user) => {
-                    match age_table.get(user) {
+                    match age_table.get(&user) {
                         Some(age) => Ok(Responses::GotUser(age.clone())),
                         None => Err(Errors::NoSuchPerson)
                     }
@@ -37,16 +37,20 @@ fn main() {
 
     // Create user
     let username = String::from("George");
-    requester.request(Commands::CreateUser(username.clone(), 64)).unwrap();
+    let cmd = Commands::CreateUser(username.clone(), 64);
+    let receiver = requester.request(cmd).unwrap();
+    receiver.collect().unwrap().unwrap();
     // Fetch user and verify data
     let command = Commands::GetUser(username.clone());
-    match requester.request(command).unwrap() {
+    let receiver = requester.request(command).unwrap();
+    match receiver.collect().unwrap().unwrap() {
         Responses::GotUser(age) => assert_eq!(age, 64),
         _ => panic!("Wrong age")
     }
     // Try to fetch non-existing user
     let username = String::from("David");
     let command = Commands::GetUser(username);
-    let result = requester.request(command);
+    let receiver = requester.request(command).unwrap();
+    let result = receiver.collect().unwrap();
     assert!(result.is_err());
 }
