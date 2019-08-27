@@ -1,14 +1,24 @@
-//! mpsc_requests rewritted for crossbeam, written by @stjepang (https://github.com/crossbeam-rs/crossbeam/issues/353#issuecomment-484013974)
+//! mpsc_requests rewritten for crossbeam, written by @stjepang (https://github.com/crossbeam-rs/crossbeam/issues/353#issuecomment-484013974)
 //!
-//! mpsc_requests is a small library built on top of crossbeam-channel but with
+//! crossbeam_requests is a small library built on top of crossbeam-channel but with
 //! the addition of the consumer responding with a message to the producer.
 //! Since the producer no longer only produces and the consumer no longer only consumes, the
-//! Producer is renamed to [Requester] and the Consumer is renamed to [Responder].
+//! Producer is renamed to [RequestSender] and the Consumer is renamed to [RequestReceiver].
 //!
-//! mpsc_requests is small and lean by only building on top of the rust standard library
+//! This library is based on crossbeam-requests instead of mpsc channels in the standard library
+//! because crossbeam has better performance and better compatibility with android.
 //!
 //! A perfect use-case for this library is single-threaded databases which need
 //! to be accessed from multiple threads (such as SQLite)
+//!
+//! Here's a diagram of the dataflow
+//!
+//! |--------------------------------------------------------------------------------------|
+//! | Thread    | Request thread |            Respond thread           |  Request thread   |
+//! |--------------------------------------------------------------------------------------|
+//! | Struct    | RequestSender ->  RequestReceiver  -> ResponseSender -> ResponseReceiver |
+//! | (methods) |   (request)   -> (poll, poll_loop) ->    (respond)   ->    (collect)     |
+//! |--------------------------------------------------------------------------------------|
 //!
 //! # Examples
 //! For more examples, see the examples directory
@@ -22,14 +32,15 @@
 //!
 //! type RequestType = String;
 //! type ResponseType = String;
-//! let (responder, requester) = channel::<RequestType, ResponseType>();
+//! let (requester, responder) = channel::<RequestType, ResponseType>();
 //! thread::spawn(move || {
-//!     responder.poll_loop(|mut req| {
-//!         req.respond(req.body().clone());
+//!     responder.poll_loop(|req, res_sender| {
+//!         res_sender.respond(req);
 //!     });
 //! });
 //! let msg = String::from("Hello");
-//! let res = requester.request(msg.clone());
+//! let receiver = requester.request(msg.clone()).unwrap();
+//! let res = receiver.collect().unwrap();
 //! assert_eq!(res, msg);
 //! ```
 
@@ -37,24 +48,23 @@
 
 use crossbeam_channel as cc;
 
-/// Create a [Requester] and a [Responder] with a channel between them
+/// Create a [RequestSender] and a [RequestReceiver] with a channel between them
 ///
-/// The [Requester] can be cloned to be able to do requests to the same [Responder] from multiple
+/// The [RequestSender] can be cloned to be able to do requests to the same [RequestReceiver] from multiple
 /// threads.
-pub fn channel<Req, Res>() -> (Responder<Req, Res>, Requester<Req, Res>) {
-    let (request_sender, request_receiver) = cc::unbounded::<Request<Req, Res>>();
-    let c = Responder::new(request_receiver);
-    let p = Requester::new(request_sender);
-    return (c, p)
-
+pub fn channel<Req, Res>() -> (RequestSender<Req, Res>, RequestReceiver<Req, Res>) {
+    let (request_sender, request_receiver) = cc::unbounded::<(Req, ResponseSender<Res>)>();
+    let request_sender = RequestSender::new(request_sender);
+    let request_receiver = RequestReceiver::new(request_receiver);
+    (request_sender, request_receiver)
 }
 
 #[derive(Debug)]
-/// Errors which can occur when a [Responder] handles a request
+/// Errors which can occur when a [RequestReceiver] handles a request
 pub enum RequestError {
-    /// Error occuring when channel from [Requester] to [Responder] is broken
+    /// Error occuring when channel from [RequestSender] to [RequestReceiver] is broken
     RecvError,
-    /// Error occuring when channel from [Responder] to [Requester] is broken
+    /// Error occuring when channel from [RequestReceiver] to [RequestSender] is broken
     SendError
 }
 impl From<cc::RecvError> for RequestError {
@@ -68,84 +78,63 @@ impl<T> From<cc::SendError<T>> for RequestError {
     }
 }
 
-/// A object expected tois a request which is received from the [Responder] poll method
-///
-/// The request body can be obtained from the body() function and before being
-/// dropped it needs to send a response with the respond() function.
-/// Not doing a response on a request is considered a programmer error and will result in a panic
-/// when the object gets dropped
-pub struct Request<Req, Res> {
-    request: Req,
+/// A [ResponseSender] is received from the [RequestReceiver] to respond to the request back to the
+/// [RequestSender]
+pub struct ResponseSender<Res> {
     response_sender: cc::Sender<Res>,
-    _responded: bool
 }
 
-impl<Req, Res> Request<Req, Res> {
-    fn new(request: Req, response_sender: cc::Sender<Res>) -> Request<Req, Res> {
-        Request {
-            request: request,
+impl<Res> ResponseSender<Res> {
+    fn new(response_sender: cc::Sender<Res>) -> ResponseSender<Res> {
+        ResponseSender {
             response_sender: response_sender,
-            _responded: false,
         }
     }
 
-    /// Get actual request data
-    pub fn body(&self) -> &Req {
-        &self.request
-    }
-
-    /// TODO
-    pub fn respond(&mut self, response: Res) {
-        if self._responded {
-            panic!("Programmer error, same request cannot respond twice!");
-        }
+    /// Responds a request from the [RequestSender] which finishes the request
+    pub fn respond(&self, response: Res) {
         match self.response_sender.send(response) {
             Ok(_) => (),
-            Err(_e) => panic!("Request failed, send pipe was broken during request!")
-        }
-        self._responded = true;
-    }
-}
-
-impl<Req, Res> Drop for Request<Req, Res> {
-    fn drop(&mut self) {
-        if !self._responded {
-            panic!("Dropped request without responding, programmer error!");
+            Err(_e) => panic!("Response failed, send pipe was broken during request!")
         }
     }
 }
 
-/// A [Responder] listens to requests of a specific type and responds back to the [Requester]
-pub struct Responder<Req, Res> {
-    request_receiver: cc::Receiver<Request<Req, Res>>,
+/// A [RequestReceiver] listens to requests. Requests are a tuple of a message
+/// and a [ResponseSender] which is used to respond back to the [ResponseReceiver]
+pub struct RequestReceiver<Req, Res> {
+    request_receiver: cc::Receiver<(Req, ResponseSender<Res>)>,
 }
 
-impl<Req, Res> Responder<Req, Res> {
-    fn new(request_receiver: cc::Receiver<Request<Req, Res>>) -> Responder<Req, Res> {
-        Responder {
-            request_receiver: request_receiver,
+impl<Req, Res> RequestReceiver<Req, Res> {
+    fn new(request_receiver: cc::Receiver<(Req, ResponseSender<Res>)>) -> RequestReceiver<Req, Res> {
+        RequestReceiver {
+            request_receiver,
         }
     }
 
-    /// Poll if the [Responder] has received any requests.
-    /// It then returns a Request which you need to call respond() on before dropping.
-    /// Not calling respond is considered a programmer error and will result in a panic
+    /// Poll if the [RequestReceiver] has received any requests.
+    /// The poll returns a tuple of the request message and a [ResponseSender]
+    /// which is used to respond back to the ResponseReceiver.
+    ///
+    /// NOTE: It is considered an programmer error to not send a response with
+    /// the [ResponseSender]
     ///
     /// This call is blocking
-    /// TODO: add try_poll
-    pub fn poll(&self) -> Result<Request<Req, Res>, RequestError> {
+    /// TODO: add a poll equivalent which is not blocking and/or has a timeout
+    pub fn poll(&self) -> Result<(Req, ResponseSender<Res>), RequestError> {
         match self.request_receiver.recv() {
-            Ok(r) => Ok(r),
+            Ok((request, response_sender)) => Ok((request, response_sender)),
             Err(_e) => Err(RequestError::RecvError)
         }
     }
 
-    /// A shorthand for running poll with a closure for as long as there is one or more [Requester]s alive
-    /// referencing this [Responder]
-    pub fn poll_loop<F>(&self, mut f: F) where F: FnMut(Request<Req, Res>) {
+    /// A shorthand for running poll with a closure for as long as there is one or more [RequestSender]s alive
+    /// referencing this [RequestReceiver]
+    pub fn poll_loop<F>(&self, mut f: F) where F: FnMut(Req, ResponseSender<Res>) {
         loop {
             match self.poll() {
-                Ok(request) => f(request),
+                Ok((request, response_sender)) => f(request, response_sender),
                 Err(e) => match e {
                     // No more send channels open, quitting
                     RequestError::RecvError => break,
@@ -156,24 +145,50 @@ impl<Req, Res> Responder<Req, Res> {
     }
 }
 
-/// [Requester] has a connection to a [Responder] which it can send requests to
+
+/// [ResponseReceiver] listens for a response from a [ResponseSender].
+/// The response is received using the collect method.
 #[derive(Clone)]
-pub struct Requester<Req, Res> {
-    request_sender: cc::Sender<Request<Req, Res>>,
+pub struct ResponseReceiver<Res> {
+    response_receiver: cc::Receiver<Res>,
 }
 
-impl<Req, Res> Requester<Req, Res> {
-    fn new(request_sender: cc::Sender<Request<Req, Res>>) -> Requester<Req, Res> {
-        Requester {
+impl<Res> ResponseReceiver<Res> {
+    fn new(response_receiver: cc::Receiver<Res>) -> ResponseReceiver<Res> {
+        ResponseReceiver {
+            response_receiver
+        }
+    }
+
+    /// Send request to the connected [RequestReceiver]
+    pub fn collect(&self) -> Result<Res, RequestError> {
+        Ok(self.response_receiver.recv()?)
+    }
+}
+
+
+/// [RequestSender] has a connection to a [RequestReceiver] to which it can
+/// send a requests to.
+/// The request method is used to make a request and it returns a
+/// [ResponseReceiver] which is used to receive the response.
+#[derive(Clone)]
+pub struct RequestSender<Req, Res> {
+    request_sender: cc::Sender<(Req, ResponseSender<Res>)>,
+}
+
+impl<Req, Res> RequestSender<Req, Res> {
+    fn new(request_sender: cc::Sender<(Req, ResponseSender<Res>)>) -> RequestSender<Req, Res> {
+        RequestSender {
             request_sender: request_sender,
         }
     }
 
-    /// Send request to the connected [Responder]
-    pub fn request(&self, request: Req) -> Res {
+    /// Send request to the connected [RequestReceiver]
+    /// Returns a [RequestReceiver] which is used to receive the response.
+    pub fn request(&self, request: Req) -> Result<ResponseReceiver<Res>, RequestError> {
         let (response_sender, response_receiver) = cc::unbounded::<Res>();
-        let full_request = Request::new(request, response_sender);
-        self.request_sender.send(full_request).unwrap();
-        response_receiver.recv().unwrap()
+        let response_sender = ResponseSender::new(response_sender);
+        self.request_sender.send((request, response_sender))?;
+        Ok(ResponseReceiver::new(response_receiver))
     }
 }

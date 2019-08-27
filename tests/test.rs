@@ -4,33 +4,36 @@ mod tests {
 
     use std::thread;
 
-    use crossbeam_requests::{channel, Requester};
+    use crossbeam_requests::{channel, RequestSender};
 
     // Tests responding with same data as was sent
     #[test]
     fn test_echo() {
-        let (responder, requester) = channel::<String, String>();
+        let (requester, responder) = channel::<String, String>();
         thread::spawn(move || {
-            responder.poll_loop(|mut req| req.respond(req.body().clone()));
+            responder.poll_loop(|req, res_sender| res_sender.respond(req));
         });
         let msg = String::from("test");
-        let result = requester.request(msg.clone());
+        let receiver = requester.request(msg.clone()).unwrap();
+        let result = receiver.collect().unwrap();
         assert_eq!(result, msg);
     }
 
     // Tests different types of the Request and Reponse types
     #[test]
     fn test_wordcount() {
-        let (responder, requester) = channel::<String, usize>();
+        let (requester, responder) = channel::<String, usize>();
         thread::spawn(move || {
-            responder.poll_loop(|mut req| req.respond(req.body().len()));
+            responder.poll_loop(|req, res_sender| res_sender.respond(req.len()));
         });
         let msg = String::from("test");
-        let result = requester.request(msg.clone());
+        let receiver = requester.request(msg.clone()).unwrap();
+        let result = receiver.collect().unwrap();
         assert_eq!(result, 4);
 
         let msg = String::from("hello hello 123 123");
-        let result = requester.request(msg.clone());
+        let receiver = requester.request(msg.clone()).unwrap();
+        let result = receiver.collect().unwrap();
         assert_eq!(result, 19);
     }
 
@@ -39,22 +42,24 @@ mod tests {
     fn test_result() {
         #[derive(Debug)]
         struct InvalidStringError;
-        let (responder, requester) = channel::<String, Result<(), InvalidStringError>>();
+        let (requester, responder) = channel::<String, Result<(), InvalidStringError>>();
         thread::spawn(move || {
-            responder.poll_loop(|mut req| {
-                if req.body().starts_with("http://") {
-                    req.respond(Ok(()))
+            responder.poll_loop(|req, res_sender| {
+                if req.starts_with("http://") {
+                    res_sender.respond(Ok(()))
                 } else {
-                    req.respond(Err(InvalidStringError))
+                    res_sender.respond(Err(InvalidStringError))
                 }
             });
         });
         let msg = String::from("http://test.com");
-        let result = requester.request(msg);
+        let receiver = requester.request(msg).unwrap();
+        let result = receiver.collect().unwrap();
         result.unwrap();
 
         let msg = String::from("invalid string");
-        let result = requester.request(msg);
+        let receiver = requester.request(msg).unwrap();
+        let result = receiver.collect().unwrap();
         assert!(result.is_err());
     }
 
@@ -68,17 +73,18 @@ mod tests {
         const N_THREADS : usize = 10;
         const N_REQUESTS_PER_THREAD : i64 = 1000;
 
-        let (responder, requester) = channel::<String, String>();
+        let (requester, responder) = channel::<String, String>();
         thread::spawn(move || {
-            responder.poll_loop(|mut req| req.respond(req.body().clone()));
+            responder.poll_loop(|req, res_sender| res_sender.respond(req.clone()));
         });
 
-        fn request_fn(requester: Requester<String, String>, ti: usize, atomic_counter: Arc<AtomicUsize>) {
+        fn request_fn(requester: RequestSender<String, String>, ti: usize, atomic_counter: Arc<AtomicUsize>) {
             atomic_counter.fetch_add(1, Ordering::Acquire);
             thread::park();
             for i in 0..N_REQUESTS_PER_THREAD {
                 let msg = format!("message from thread {} iteration {}", ti, i);
-                let result = requester.request(msg.clone());
+                let receiver = requester.request(msg.clone()).unwrap();
+                let result = receiver.collect().unwrap();
                 assert_eq!(result, msg);
             }
             atomic_counter.fetch_sub(1, Ordering::Acquire);

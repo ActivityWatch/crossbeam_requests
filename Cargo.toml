@@ -1,10 +1,10 @@
 [package]
 name = "crossbeam_requests"
 description = "Crossbeam channels but with a response"
-version = "0.2.0"
+version = "0.3.0"
 license = "MPL-2.0"
 authors = ["Johan Bjäreholt <johan@bjareho.lt>"]
 edition = "2018"
 
 [dependencies]
-crossbeam-channel = "0.3.8"
+crossbeam-channel = "0.3"

@@ -1,6 +1,10 @@
-mpsc\_requests
+crossbeam\_requests
 =============
 
-[![test](https://docs.rs/mpsc_requests/badge.svg)](https://docs.rs/mpsc_requests/0.1.0/mpsc_requests/)
+[![test](https://docs.rs/crossbeam_requests/badge.svg)](https://docs.rs/crossbeam_requests/latest/crossbeam_requests/)
 
 For more info look at the docs linked above
+
+TODO:
+- Rename back to mpsc_requests? crossbeam-requests is an undescriptive name and mpsc_request is inferior.
+- Better error handling
