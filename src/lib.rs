@@ -28,7 +28,7 @@
 //! ## Simple echo example
 //! ```rust,run
 //! use std::thread;
-//! use crossbeam_requests::channel;
+//! use mpsc_requests::channel;
 //!
 //! type RequestType = String;
 //! type ResponseType = String;
