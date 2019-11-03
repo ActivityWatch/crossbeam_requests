@@ -1,9 +1,12 @@
 [package]
-name = "crossbeam_requests"
-description = "Crossbeam channels but with a response"
-version = "0.3.0"
+name = "mpsc_requests"
+description = "mpsc channels but with a response"
+version = "0.3.1"
 license = "MPL-2.0"
-authors = ["Johan Bjäreholt <johan@bjareho.lt>"]
+authors = [
+    "Johan Bjäreholt <johan@bjareho.lt>",
+    "Erik Bjäreholt <erik@bjareholt.com>"
+]
 edition = "2018"
 
 [dependencies]

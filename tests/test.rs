@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
-    extern crate crossbeam_requests;
+    extern crate mpsc_requests;
 
     use std::thread;
 
-    use crossbeam_requests::{channel, RequestSender};
+    use mpsc_requests::{channel, RequestSender};
 
     // Tests responding with same data as was sent
     #[test]
