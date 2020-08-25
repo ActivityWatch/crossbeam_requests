@@ -6,6 +6,19 @@ mod tests {
 
     use mpsc_requests::{channel, RequestSender};
 
+    /// Check that the RequestSender and Receiver can be cloned even if the
+    /// request and response types doesn't implement Clone
+    #[test]
+    fn test_clone() {
+        struct NoClone;
+        let (requester, responder) = channel::<NoClone, NoClone>();
+        let req2 = requester.clone();
+        let resp = req2.request(NoClone).unwrap();
+        responder.poll().unwrap().1.respond(NoClone);
+        let resp2 = resp.clone();
+        resp2.collect().unwrap();
+    }
+
     // Tests responding with same data as was sent
     #[test]
     fn test_echo() {

@@ -148,9 +148,16 @@ impl<Req, Res> RequestReceiver<Req, Res> {
 
 /// [ResponseReceiver] listens for a response from a [ResponseSender].
 /// The response is received using the collect method.
-#[derive(Clone)]
 pub struct ResponseReceiver<Res> {
     response_receiver: cc::Receiver<Res>,
+}
+
+impl <Res> Clone for ResponseReceiver<Res> {
+    fn clone(&self) -> Self {
+        ResponseReceiver {
+            response_receiver: self.response_receiver.clone()
+        }
+    }
 }
 
 impl<Res> ResponseReceiver<Res> {
@@ -171,9 +178,16 @@ impl<Res> ResponseReceiver<Res> {
 /// send a requests to.
 /// The request method is used to make a request and it returns a
 /// [ResponseReceiver] which is used to receive the response.
-#[derive(Clone)]
 pub struct RequestSender<Req, Res> {
     request_sender: cc::Sender<(Req, ResponseSender<Res>)>,
+}
+
+impl<Req, Res> Clone for RequestSender<Req, Res> {
+    fn clone(&self) -> Self {
+        RequestSender {
+            request_sender: self.request_sender.clone()
+        }
+    }
 }
 
 impl<Req, Res> RequestSender<Req, Res> {
