@@ -51,7 +51,7 @@ impl WorkerPool {
         };
     }
 
-    pub fn work(&mut self, request: String) -> String {
+    pub fn work(&mut self, request: RequestType) -> ResponseType {
         let requester = self.requesters_arc.get(self.worker_index).unwrap();
         let receiver = requester.request(request.clone()).unwrap();
         let response = receiver.collect().unwrap();
