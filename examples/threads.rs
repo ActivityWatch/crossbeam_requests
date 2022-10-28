@@ -65,7 +65,7 @@ impl WorkerPool {
 
 fn main() {
     let num_threads = 4;
-    let handler = |request: ResponseType| {
+    let handler = |request: RequestType| {
         println!("request = {}", request);
         return String::from("response");
     };
